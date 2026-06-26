@@ -24,9 +24,14 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     await client.connect();
+
+    //collections
+
     const database = client.db("startup-forge");
     const usersCollection = database.collection("user");
     const startupsCollection = database.collection("startups");
+    const opportunitiesCollection = database.collection("opportunities");
+
     //user related api
 
     app.get("/api/users", async (req, res) => {
@@ -49,6 +54,8 @@ async function run() {
     });
 
     // founder related api
+
+    // startup related
     app.get("/api/startups", async (req, res) => {
       const cursor = startupsCollection.find();
       const startups = await cursor.toArray();
@@ -70,7 +77,6 @@ async function run() {
       });
       res.send(startup || {});
     });
-
 
     app.post("/api/startups", async (req, res) => {
       const startup = req.body;
@@ -131,6 +137,37 @@ async function run() {
         totalApplications,
         acceptedMembers,
       });
+    });
+
+    //opportunities related
+
+    app.post("/api/opportunities", async (req, res) => {
+      const result = await opportunitiesCollection.insertOne(req.body);
+      res.send(result);
+    });
+
+    app.get("/api/opportunities/founder", async (req, res) => {
+      const { email } = req.query;
+      const result = await opportunitiesCollection
+        .find({ founder_email: email })
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    app.patch("/api/opportunities/:id", async (req, res) => {
+      const result = await opportunitiesCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: req.body },
+      );
+      res.send(result);
+    });
+
+    app.delete("/api/opportunities/:id", async (req, res) => {
+      const result = await opportunitiesCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
+      res.send(result);
     });
 
     await client.db("admin").command({ ping: 1 });
