@@ -31,6 +31,7 @@ async function run() {
     const usersCollection = database.collection("user");
     const startupsCollection = database.collection("startups");
     const opportunitiesCollection = database.collection("opportunities");
+    const applicationsCollection = database.collection("applications");
 
     //user related api
 
@@ -167,6 +168,80 @@ async function run() {
       const result = await opportunitiesCollection.deleteOne({
         _id: new ObjectId(req.params.id),
       });
+      res.send(result);
+    });
+
+    //application
+
+    // get all applications for a founder's opportunities
+    app.get("/api/applications/founder", async (req, res) => {
+      const { email } = req.query;
+
+      // find founder's startup first
+      const startup = await startupsCollection.findOne({
+        founder_email: email,
+      });
+      if (!startup) return res.send([]);
+
+      // get all their opportunities
+      const opportunities = await opportunitiesCollection
+        .find({ startup_id: startup._id.toString() })
+        .toArray();
+
+      if (opportunities.length === 0) return res.send([]);
+
+      const oppIds = opportunities.map((o) => o._id.toString());
+
+      // get all applications for those opportunities
+      // join role_title and startup_name for display
+      const applications = await applicationsCollection
+        .find({ opportunity_id: { $in: oppIds } })
+        .sort({ applied_at: -1 })
+        .toArray();
+
+      // attach role_title + startup_name + deadline to each application
+      const oppMap = Object.fromEntries(
+        opportunities.map((o) => [o._id.toString(), o]),
+      );
+
+      const enriched = applications.map((app) => ({
+        ...app,
+        role_title: oppMap[app.opportunity_id]?.role_title ?? "—",
+        startup_name: startup.startup_name,
+        deadline: oppMap[app.opportunity_id]?.deadline ?? null,
+      }));
+
+      res.send(enriched);
+    });
+
+    app.post("/api/applications", async (req, res) => {
+      const existing = await applicationsCollection.findOne({
+        opportunity_id: req.body.opportunity_id,
+        applicant_email: req.body.applicant_email,
+      });
+
+      // prevent duplicate applications
+      if (existing) {
+        return res.status(409).json({
+          success: false,
+          message: "You have already applied to this opportunity.",
+        });
+      }
+
+      const result = await applicationsCollection.insertOne({
+        ...req.body,
+        status: "pending",
+        applied_at: new Date(),
+      });
+
+      res.send(result);
+    });
+
+    app.patch("/api/applications/:id", async (req, res) => {
+      const result = await applicationsCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: req.body },
+      );
       res.send(result);
     });
 
