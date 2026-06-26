@@ -245,6 +245,75 @@ async function run() {
       res.send(result);
     });
 
+    // get all applications for a collaborator
+    app.get("/api/applications/collaborator", async (req, res) => {
+      const { email } = req.query;
+
+      const applications = await applicationsCollection
+        .find({ applicant_email: email })
+        .sort({ applied_at: -1 })
+        .toArray();
+
+      if (applications.length === 0) return res.send([]);
+
+      // enrich each application with role_title, startup_name, deadline
+      const oppIds = applications
+        .map((a) => {
+          try {
+            return new ObjectId(a.opportunity_id);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+
+      const opportunities = await opportunitiesCollection
+        .find({ _id: { $in: oppIds } })
+        .toArray();
+
+      const oppMap = Object.fromEntries(
+        opportunities.map((o) => [o._id.toString(), o]),
+      );
+
+      // get startup names
+      const startupIds = [
+        ...new Set(opportunities.map((o) => o.startup_id).filter(Boolean)),
+      ];
+
+      const startups = await startupsCollection
+        .find({
+          _id: {
+            $in: startupIds
+              .map((id) => {
+                try {
+                  return new ObjectId(id);
+                } catch {
+                  return null;
+                }
+              })
+              .filter(Boolean),
+          },
+        })
+        .toArray();
+
+      const startupMap = Object.fromEntries(
+        startups.map((s) => [s._id.toString(), s]),
+      );
+
+      const enriched = applications.map((app) => {
+        const opp = oppMap[app.opportunity_id] ?? {};
+        const startup = startupMap[opp.startup_id] ?? {};
+        return {
+          ...app,
+          role_title: opp.role_title ?? "—",
+          startup_name: startup.startup_name ?? "—",
+          deadline: opp.deadline ?? null,
+        };
+      });
+
+      res.send(enriched);
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
