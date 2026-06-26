@@ -340,6 +340,48 @@ async function run() {
       res.json({ success: true, deletedCount: result.deletedCount });
     });
 
+    // GET all approved startups with opportunity count
+    app.get("/api/startups/approved", async (req, res) => {
+      const startups = await startupsCollection
+        .find({ status: "approved" })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      // attach opportunity count to each startup
+      const withCounts = await Promise.all(
+        startups.map(async (s) => {
+          const count = await opportunitiesCollection.countDocuments({
+            startup_id: s._id.toString(),
+          });
+          return { ...s, opportunityCount: count };
+        }),
+      );
+
+      res.json(withCounts);
+    });
+
+    // GET single startup by id
+    app.get("/api/startups/:id", async (req, res) => {
+      try {
+        const startup = await startupsCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        if (!startup) return res.status(404).json({ error: "Not found" });
+        res.json(startup);
+      } catch {
+        res.status(400).json({ error: "Invalid ID" });
+      }
+    });
+
+    // GET opportunities for a specific startup
+    app.get("/api/opportunities/startup/:id", async (req, res) => {
+      const result = await opportunitiesCollection
+        .find({ startup_id: req.params.id, status: "open" })
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.json(result);
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
