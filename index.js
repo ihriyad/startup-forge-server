@@ -314,6 +314,32 @@ async function run() {
       res.send(enriched);
     });
 
+    // GET all startups for admin
+    app.get("/api/admin/startups", async (req, res) => {
+      const result = await startupsCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.json(result);
+    });
+
+    // PATCH — approve or any status update
+    app.patch("/api/admin/startups/:id", async (req, res) => {
+      const result = await startupsCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: req.body },
+      );
+      res.json({ success: true, modifiedCount: result.modifiedCount });
+    });
+
+    // DELETE — remove startup
+    app.delete("/api/admin/startups/:id", async (req, res) => {
+      const result = await startupsCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
+      res.json({ success: true, deletedCount: result.deletedCount });
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
