@@ -32,6 +32,7 @@ async function run() {
     const startupsCollection = database.collection("startups");
     const opportunitiesCollection = database.collection("opportunities");
     const applicationsCollection = database.collection("applications");
+    const paymentsCollection = database.collection("payments");
 
     //user related api
 
@@ -439,6 +440,39 @@ async function run() {
       }
     });
 
+    // POST /api/payments — save transaction + upgrade plan (duplicate-safe)
+    app.post("/api/payments", async (req, res) => {
+      const payload = req.body;
+
+      // prevent duplicate if user refreshes success page
+      const existing = await paymentsCollection.findOne({
+        transaction_id: payload.transaction_id,
+      });
+
+      if (existing) {
+        return res.json({ success: true, duplicate: true });
+      }
+
+      // save payment record
+      await paymentsCollection.insertOne(payload);
+
+      // upgrade user plan to premium
+      await usersCollection.updateOne(
+        { email: payload.user_email },
+        { $set: { plan: "premium" } },
+      );
+
+      res.json({ success: true });
+    });
+
+    // GET /api/payments — admin transactions page
+    app.get("/api/payments", async (req, res) => {
+      const payments = await paymentsCollection
+        .find({})
+        .sort({ paid_at: -1 })
+        .toArray();
+      res.json(payments);
+    });
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
