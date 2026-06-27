@@ -382,6 +382,63 @@ async function run() {
       res.json(result);
     });
 
+    // GET opportunities with search + filter + pagination
+    app.get("/api/opportunities", async (req, res) => {
+      const {
+        search = "",
+        workType = "",
+        industry = "",
+        page = "1",
+        limit = "9",
+      } = req.query;
+
+      const filter = { status: "open" };
+
+      // $regex search on role_title OR required_skills
+      if (search) {
+        filter.$or = [
+          { role_title: { $regex: search, $options: "i" } },
+          { required_skills: { $regex: search, $options: "i" } },
+        ];
+      }
+
+      // $in filter for work_type
+      if (workType) {
+        filter.work_type = { $in: [workType] };
+      }
+
+      // join with startups to filter by industry
+      // store industry on opportunity at creation time for simple filtering
+      if (industry) {
+        filter.industry = { $in: [industry] };
+      }
+
+      const skip = (Number(page) - 1) * Number(limit);
+      const total = await opportunitiesCollection.countDocuments(filter);
+
+      const opportunities = await opportunitiesCollection
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .toArray();
+
+      res.json({ opportunities, total });
+    });
+
+    // GET single opportunity by id
+    app.get("/api/opportunities/:id", async (req, res) => {
+      try {
+        const opp = await opportunitiesCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        if (!opp) return res.status(404).json({ error: "Not found" });
+        res.json(opp);
+      } catch {
+        res.status(400).json({ error: "Invalid ID" });
+      }
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
