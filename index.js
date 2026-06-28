@@ -25,8 +25,6 @@ async function run() {
   try {
     await client.connect();
 
-    //collections
-
     const database = client.db("startup-forge");
     const usersCollection = database.collection("user");
     const startupsCollection = database.collection("startups");
@@ -34,42 +32,45 @@ async function run() {
     const applicationsCollection = database.collection("applications");
     const paymentsCollection = database.collection("payments");
 
-    //user related api
+    // ── Users ──────────────────────────────────────────────────────────────
 
     app.get("/api/users", async (req, res) => {
-      const cursor = usersCollection.find();
-      const result = await cursor.toArray();
-      res.send(result);
+      const result = await usersCollection.find().toArray();
+      res.json(result);
     });
 
-    app.patch("/api/users/:id", async (req, res) => {
-      const id = req.params.id;
-      const updateData = req.body;
-      // console.log(updateData);
-
-      const filter = { _id: new ObjectId(id) };
-      const updateDoc = { $set: updateData };
-
-      const result = await usersCollection.updateOne(filter, updateDoc);
-
-      res.send(result);
+    app.patch("/api/users/:email", async (req, res) => {
+      const result = await usersCollection.updateOne(
+        { email: req.params.email }, // email is always reliable
+        { $set: req.body },
+      );
+      console.log(result);
+      res.json({ success: true, modifiedCount: result.modifiedCount });
     });
 
-    // founder related api
+    // ── Startups — specific routes BEFORE /:id ─────────────────────────────
 
-    // startup related
-    app.get("/api/startups", async (req, res) => {
-      const cursor = startupsCollection.find();
-      const startups = await cursor.toArray();
-      for (const startup of startups) {
-        const filter = {
-          startupId: startup._id.toString(),
-        };
-        const opportunitiesCount =
-          await startupsCollection.countDocuments(filter);
-        startup.opportunitiesCount = opportunitiesCount;
-      }
-      res.send(startups || {});
+    app.post("/api/startups", async (req, res) => {
+      const result = await startupsCollection.insertOne(req.body);
+      res.json({ success: true, insertedId: result.insertedId });
+    });
+
+    app.get("/api/startups/approved", async (req, res) => {
+      const startups = await startupsCollection
+        .find({ status: "approved" })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      const withCounts = await Promise.all(
+        startups.map(async (s) => {
+          const count = await opportunitiesCollection.countDocuments({
+            startup_id: s._id.toString(),
+          });
+          return { ...s, opportunityCount: count };
+        }),
+      );
+
+      res.json(withCounts);
     });
 
     app.get("/api/startups/founder", async (req, res) => {
@@ -77,21 +78,12 @@ async function run() {
       const startup = await startupsCollection.findOne({
         founder_email: email,
       });
-      res.send(startup || {});
+      res.json(startup || null);
     });
 
-    app.post("/api/startups", async (req, res) => {
-      const startup = req.body;
-      const result = await startupsCollection.insertOne(startup);
-      res.send(result);
-    });
-
-    app.delete("/api/startups/:id", async (req, res) => {
-      const result = await startupsCollection.deleteOne({
-        _id: new ObjectId(req.params.id),
-      });
-
-      res.send(result);
+    app.get("/api/startups", async (req, res) => {
+      const result = await startupsCollection.find().toArray();
+      res.json(result);
     });
 
     app.patch("/api/startups/:id", async (req, res) => {
@@ -99,10 +91,56 @@ async function run() {
         { _id: new ObjectId(req.params.id) },
         { $set: req.body },
       );
-      res.send(result);
+      res.json({ success: true, modifiedCount: result.modifiedCount });
     });
 
-    // founder stats — opportunities + applications + accepted count
+    app.delete("/api/startups/:id", async (req, res) => {
+      const result = await startupsCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
+      res.json({ success: true, deletedCount: result.deletedCount });
+    });
+
+    // ✅ dynamic /:id LAST
+    app.get("/api/startups/:id", async (req, res) => {
+      try {
+        const startup = await startupsCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        if (!startup) return res.status(404).json({ error: "Not found" });
+        res.json(startup);
+      } catch {
+        res.status(400).json({ error: "Invalid ID" });
+      }
+    });
+
+    // ── Admin Startups ─────────────────────────────────────────────────────
+
+    app.get("/api/admin/startups", async (req, res) => {
+      const result = await startupsCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.json(result);
+    });
+
+    app.patch("/api/admin/startups/:id", async (req, res) => {
+      const result = await startupsCollection.updateOne(
+        { _id: new ObjectId(req.params.id) },
+        { $set: req.body },
+      );
+      res.json({ success: true, modifiedCount: result.modifiedCount });
+    });
+
+    app.delete("/api/admin/startups/:id", async (req, res) => {
+      const result = await startupsCollection.deleteOne({
+        _id: new ObjectId(req.params.id),
+      });
+      res.json({ success: true, deletedCount: result.deletedCount });
+    });
+
+    // ── Founder Stats ──────────────────────────────────────────────────────
+
     app.get("/api/founder/stats", async (req, res) => {
       const { email } = req.query;
       const startup = await startupsCollection.findOne({
@@ -115,9 +153,6 @@ async function run() {
           totalApplications: 0,
           acceptedMembers: 0,
         });
-
-      const opportunitiesCollection = database.collection("opportunities");
-      const applicationsCollection = database.collection("applications");
 
       const opportunities = await opportunitiesCollection
         .find({ startup_id: startup._id.toString() })
@@ -134,27 +169,80 @@ async function run() {
         status: "accepted",
       });
 
-      res.send({
+      res.json({
         totalOpportunities: opportunities.length,
         totalApplications,
         acceptedMembers,
       });
     });
 
-    //opportunities related
+    // ── Opportunities — specific routes BEFORE /:id ────────────────────────
 
     app.post("/api/opportunities", async (req, res) => {
       const result = await opportunitiesCollection.insertOne(req.body);
-      res.send(result);
+      res.json({ success: true, insertedId: result.insertedId });
     });
 
+    // all opportunities for admin — no filter
+    app.get("/api/opportunities/all", async (req, res) => {
+      const result = await opportunitiesCollection
+        .find({})
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.json(result);
+    });
+
+    // founder's own opportunities
     app.get("/api/opportunities/founder", async (req, res) => {
       const { email } = req.query;
       const result = await opportunitiesCollection
         .find({ founder_email: email })
         .sort({ createdAt: -1 })
         .toArray();
-      res.send(result);
+      res.json(result);
+    });
+
+    // opportunities for a specific startup
+    app.get("/api/opportunities/startup/:id", async (req, res) => {
+      const result = await opportunitiesCollection
+        .find({ startup_id: req.params.id, status: "open" })
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.json(result);
+    });
+
+    // public browse — search + filter + pagination
+    app.get("/api/opportunities", async (req, res) => {
+      const {
+        search = "",
+        workType = "",
+        industry = "",
+        page = "1",
+        limit = "9",
+      } = req.query;
+
+      const filter = { status: "open" };
+
+      if (search) {
+        filter.$or = [
+          { role_title: { $regex: search, $options: "i" } },
+          { required_skills: { $regex: search, $options: "i" } },
+        ];
+      }
+      if (workType) filter.work_type = { $in: [workType] };
+      if (industry) filter.industry = { $in: [industry] };
+
+      const skip = (Number(page) - 1) * Number(limit);
+      const total = await opportunitiesCollection.countDocuments(filter);
+
+      const opportunities = await opportunitiesCollection
+        .find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .toArray();
+
+      res.json({ opportunities, total });
     });
 
     app.patch("/api/opportunities/:id", async (req, res) => {
@@ -162,58 +250,30 @@ async function run() {
         { _id: new ObjectId(req.params.id) },
         { $set: req.body },
       );
-      res.send(result);
+      res.json({ success: true, modifiedCount: result.modifiedCount });
     });
 
     app.delete("/api/opportunities/:id", async (req, res) => {
       const result = await opportunitiesCollection.deleteOne({
         _id: new ObjectId(req.params.id),
       });
-      res.send(result);
+      res.json({ success: true, deletedCount: result.deletedCount });
     });
 
-    //application
-
-    // get all applications for a founder's opportunities
-    app.get("/api/applications/founder", async (req, res) => {
-      const { email } = req.query;
-
-      // find founder's startup first
-      const startup = await startupsCollection.findOne({
-        founder_email: email,
-      });
-      if (!startup) return res.send([]);
-
-      // get all their opportunities
-      const opportunities = await opportunitiesCollection
-        .find({ startup_id: startup._id.toString() })
-        .toArray();
-
-      if (opportunities.length === 0) return res.send([]);
-
-      const oppIds = opportunities.map((o) => o._id.toString());
-
-      // get all applications for those opportunities
-      // join role_title and startup_name for display
-      const applications = await applicationsCollection
-        .find({ opportunity_id: { $in: oppIds } })
-        .sort({ applied_at: -1 })
-        .toArray();
-
-      // attach role_title + startup_name + deadline to each application
-      const oppMap = Object.fromEntries(
-        opportunities.map((o) => [o._id.toString(), o]),
-      );
-
-      const enriched = applications.map((app) => ({
-        ...app,
-        role_title: oppMap[app.opportunity_id]?.role_title ?? "—",
-        startup_name: startup.startup_name,
-        deadline: oppMap[app.opportunity_id]?.deadline ?? null,
-      }));
-
-      res.send(enriched);
+    // ✅ dynamic /:id LAST
+    app.get("/api/opportunities/:id", async (req, res) => {
+      try {
+        const opp = await opportunitiesCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        if (!opp) return res.status(404).json({ error: "Not found" });
+        res.json(opp);
+      } catch {
+        res.status(400).json({ error: "Invalid ID" });
+      }
     });
+
+    // ── Applications ───────────────────────────────────────────────────────
 
     app.post("/api/applications", async (req, res) => {
       const existing = await applicationsCollection.findOne({
@@ -221,7 +281,6 @@ async function run() {
         applicant_email: req.body.applicant_email,
       });
 
-      // prevent duplicate applications
       if (existing) {
         return res.status(409).json({
           success: false,
@@ -235,7 +294,7 @@ async function run() {
         applied_at: new Date(),
       });
 
-      res.send(result);
+      res.json({ success: true, insertedId: result.insertedId });
     });
 
     app.patch("/api/applications/:id", async (req, res) => {
@@ -243,10 +302,46 @@ async function run() {
         { _id: new ObjectId(req.params.id) },
         { $set: req.body },
       );
-      res.send(result);
+      res.json({ success: true, modifiedCount: result.modifiedCount });
     });
 
-    // get all applications for a collaborator
+    // founder — all applications for their opportunities
+    app.get("/api/applications/founder", async (req, res) => {
+      const { email } = req.query;
+
+      const startup = await startupsCollection.findOne({
+        founder_email: email,
+      });
+      if (!startup) return res.json([]);
+
+      const opportunities = await opportunitiesCollection
+        .find({ startup_id: startup._id.toString() })
+        .toArray();
+
+      if (opportunities.length === 0) return res.json([]);
+
+      const oppIds = opportunities.map((o) => o._id.toString());
+
+      const applications = await applicationsCollection
+        .find({ opportunity_id: { $in: oppIds } })
+        .sort({ applied_at: -1 })
+        .toArray();
+
+      const oppMap = Object.fromEntries(
+        opportunities.map((o) => [o._id.toString(), o]),
+      );
+
+      const enriched = applications.map((app) => ({
+        ...app,
+        role_title: oppMap[app.opportunity_id]?.role_title ?? "—",
+        startup_name: startup.startup_name,
+        deadline: oppMap[app.opportunity_id]?.deadline ?? null,
+      }));
+
+      res.json(enriched);
+    });
+
+    // collaborator — all their own applications
     app.get("/api/applications/collaborator", async (req, res) => {
       const { email } = req.query;
 
@@ -255,9 +350,8 @@ async function run() {
         .sort({ applied_at: -1 })
         .toArray();
 
-      if (applications.length === 0) return res.send([]);
+      if (applications.length === 0) return res.json([]);
 
-      // enrich each application with role_title, startup_name, deadline
       const oppIds = applications
         .map((a) => {
           try {
@@ -276,7 +370,6 @@ async function run() {
         opportunities.map((o) => [o._id.toString(), o]),
       );
 
-      // get startup names
       const startupIds = [
         ...new Set(opportunities.map((o) => o.startup_id).filter(Boolean)),
       ];
@@ -312,139 +405,15 @@ async function run() {
         };
       });
 
-      res.send(enriched);
+      res.json(enriched);
     });
 
-    // GET all startups for admin
-    app.get("/api/admin/startups", async (req, res) => {
-      const result = await startupsCollection
-        .find({})
-        .sort({ createdAt: -1 })
-        .toArray();
-      res.json(result);
-    });
+    // ── Payments ───────────────────────────────────────────────────────────
 
-    // PATCH — approve or any status update
-    app.patch("/api/admin/startups/:id", async (req, res) => {
-      const result = await startupsCollection.updateOne(
-        { _id: new ObjectId(req.params.id) },
-        { $set: req.body },
-      );
-      res.json({ success: true, modifiedCount: result.modifiedCount });
-    });
-
-    // DELETE — remove startup
-    app.delete("/api/admin/startups/:id", async (req, res) => {
-      const result = await startupsCollection.deleteOne({
-        _id: new ObjectId(req.params.id),
-      });
-      res.json({ success: true, deletedCount: result.deletedCount });
-    });
-
-    // GET all approved startups with opportunity count
-    app.get("/api/startups/approved", async (req, res) => {
-      const startups = await startupsCollection
-        .find({ status: "approved" })
-        .sort({ createdAt: -1 })
-        .toArray();
-
-      // attach opportunity count to each startup
-      const withCounts = await Promise.all(
-        startups.map(async (s) => {
-          const count = await opportunitiesCollection.countDocuments({
-            startup_id: s._id.toString(),
-          });
-          return { ...s, opportunityCount: count };
-        }),
-      );
-
-      res.json(withCounts);
-    });
-
-    // GET single startup by id
-    app.get("/api/startups/:id", async (req, res) => {
-      try {
-        const startup = await startupsCollection.findOne({
-          _id: new ObjectId(req.params.id),
-        });
-        if (!startup) return res.status(404).json({ error: "Not found" });
-        res.json(startup);
-      } catch {
-        res.status(400).json({ error: "Invalid ID" });
-      }
-    });
-
-    // GET opportunities for a specific startup
-    app.get("/api/opportunities/startup/:id", async (req, res) => {
-      const result = await opportunitiesCollection
-        .find({ startup_id: req.params.id, status: "open" })
-        .sort({ createdAt: -1 })
-        .toArray();
-      res.json(result);
-    });
-
-    // GET opportunities with search + filter + pagination
-    app.get("/api/opportunities", async (req, res) => {
-      const {
-        search = "",
-        workType = "",
-        industry = "",
-        page = "1",
-        limit = "9",
-      } = req.query;
-
-      const filter = { status: "open" };
-
-      // $regex search on role_title OR required_skills
-      if (search) {
-        filter.$or = [
-          { role_title: { $regex: search, $options: "i" } },
-          { required_skills: { $regex: search, $options: "i" } },
-        ];
-      }
-
-      // $in filter for work_type
-      if (workType) {
-        filter.work_type = { $in: [workType] };
-      }
-
-      // join with startups to filter by industry
-      // store industry on opportunity at creation time for simple filtering
-      if (industry) {
-        filter.industry = { $in: [industry] };
-      }
-
-      const skip = (Number(page) - 1) * Number(limit);
-      const total = await opportunitiesCollection.countDocuments(filter);
-
-      const opportunities = await opportunitiesCollection
-        .find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(Number(limit))
-        .toArray();
-
-      res.json({ opportunities, total });
-    });
-
-    // GET single opportunity by id
-    app.get("/api/opportunities/:id", async (req, res) => {
-      try {
-        const opp = await opportunitiesCollection.findOne({
-          _id: new ObjectId(req.params.id),
-        });
-        if (!opp) return res.status(404).json({ error: "Not found" });
-        res.json(opp);
-      } catch {
-        res.status(400).json({ error: "Invalid ID" });
-      }
-    });
-
-    // POST /api/payments — save transaction + upgrade plan (duplicate-safe)
     app.post("/api/payments", async (req, res) => {
       const payload = req.body;
 
-      // prevent duplicate if user refreshes success page
+      // duplicate-safe — session_id is unique per Stripe checkout
       const existing = await paymentsCollection.findOne({
         transaction_id: payload.transaction_id,
       });
@@ -453,10 +422,8 @@ async function run() {
         return res.json({ success: true, duplicate: true });
       }
 
-      // save payment record
       await paymentsCollection.insertOne(payload);
 
-      // upgrade user plan to premium
       await usersCollection.updateOne(
         { email: payload.user_email },
         { $set: { plan: "premium" } },
@@ -465,7 +432,6 @@ async function run() {
       res.json({ success: true });
     });
 
-    // GET /api/payments — admin transactions page
     app.get("/api/payments", async (req, res) => {
       const payments = await paymentsCollection
         .find({})
@@ -473,6 +439,7 @@ async function run() {
         .toArray();
       res.json(payments);
     });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
@@ -481,6 +448,7 @@ async function run() {
     // await client.close();
   }
 }
+
 process.on("unhandledRejection", (err) => console.error(err));
 run().catch(console.dir);
 
@@ -489,5 +457,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Example app listening on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
