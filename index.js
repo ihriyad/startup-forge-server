@@ -101,7 +101,7 @@ async function run() {
       res.json({ success: true, deletedCount: result.deletedCount });
     });
 
-    // ✅ dynamic /:id LAST
+    //  dynamic /:id LAST
     app.get("/api/startups/:id", async (req, res) => {
       try {
         const startup = await startupsCollection.findOne({
@@ -260,7 +260,7 @@ async function run() {
       res.json({ success: true, deletedCount: result.deletedCount });
     });
 
-    // ✅ dynamic /:id LAST
+    //  dynamic /:id LAST
     app.get("/api/opportunities/:id", async (req, res) => {
       try {
         const opp = await opportunitiesCollection.findOne({
@@ -303,6 +303,15 @@ async function run() {
         { $set: req.body },
       );
       res.json({ success: true, modifiedCount: result.modifiedCount });
+    });
+    
+    app.get("/api/applications/check", async (req, res) => {
+      const { opportunity_id, applicant_email } = req.query;
+      const existing = await applicationsCollection.findOne({
+        opportunity_id,
+        applicant_email,
+      });
+      res.json({ hasApplied: !!existing });
     });
 
     // founder — all applications for their opportunities
